@@ -5,10 +5,10 @@
 ## 原理
 
 ```
-微信 ←→ wechat-to-anything (网关) ←→ 你的 Agent (HTTP)
+微信 ←→ 腾讯 ClawBot ←→ wechat-to-anything (网关) ←→ 你的 Agent (HTTP)
 ```
 
-你的 Agent 只需暴露一个 OpenAI 兼容的 HTTP 接口，桥负责微信的连接和消息转发。
+基于[腾讯官方微信 ClawBot](https://github.com/nicepkg/openclaw-weixin) 实现微信连接，你的 Agent 只需暴露一个 OpenAI 兼容的 HTTP 接口。
 
 ## 快速开始
 
