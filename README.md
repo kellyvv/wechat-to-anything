@@ -123,24 +123,7 @@ wechat-to-anything/
 
 登录凭证保存在 `~/.wechat-to-anything/credentials.json`，删除即可重新登录。
 
-## 逆向工程备注
 
-本项目的微信接口全部通过逆向工程试出，没有任何官方文档。以下是关键发现：
-
-| CDN `mediaType` | 类型 | 说明 |
-|---|---|---|
-| 1 | IMAGE | 图片上传 |
-| 2 | VIDEO | 视频上传 |
-| 3 | FILE | 文件上传 |
-| **4** | **VOICE** | **语音上传（唯一能正常播放的类型）** |
-| 5-20 | — | 不支持 |
-
-- CDN 上传后的下载引用需使用 `x-encrypted-query-param` 响应头（非 `x-encrypted-param`）
-- 语音格式：SILK v3（Tencent 前缀 `0x02`），16kHz 采样率
-- `voice_item` 字段：`playtime`（非 `voice_length`）、`encode_type: 4`、`sample_rate: 16000`
-- `aes_key` 编码：`base64(hex_string)`，CDN 使用 AES-128-ECB 加密
-
-> 这些接口随时可能变化。如果发现问题，欢迎提 issue。
 
 ## Star History
 
