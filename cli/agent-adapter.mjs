@@ -211,7 +211,10 @@ function runClaude(prompt) {
 
 function runOpenClaw(prompt) {
   return new Promise((resolve, reject) => {
-    const child = spawn("openclaw", ["agent", "--message", prompt, "--json"], {
+    const child = spawn("openclaw", [
+      "agent", "--agent", "main", "--local",
+      "--message", prompt, "--json",
+    ], {
       cwd: tmpdir(),
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 300_000,
@@ -226,9 +229,17 @@ function runOpenClaw(prompt) {
       }
       try {
         const data = JSON.parse(stdout);
+        // OpenClaw JSON output: { result: { output: { content: [...] } } }
+        const content = data?.result?.output?.content;
+        if (Array.isArray(content)) {
+          const texts = content
+            .filter(b => b.type === "text")
+            .map(b => b.text);
+          if (texts.length) { resolve(texts.join("\n")); return; }
+        }
+        // fallback: try common fields
         resolve((data.reply || data.text || data.content || stdout).trim() || "(empty response)");
       } catch {
-        // JSON 解析失败，直接返回 stdout
         resolve(stdout.trim() || "(empty response)");
       }
     });
