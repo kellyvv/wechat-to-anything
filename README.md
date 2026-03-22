@@ -128,20 +128,7 @@ npx wechat-to-anything \
 
 **图片回复**：Agent 回复中包含 markdown 图片 `![desc](https://...)` 会自动作为图片消息发到微信。
 
-**语音回复**：Agent 回复中包含 `[audio:/path/to/file.mp3]` 会自动转为微信语音消息。支持 MP3、WAV、OGG 等常见格式，桥会自动转码为 SILK 并上传。
-
-```
-# Agent 回复示例
-[audio:/tmp/tts_output.mp3]
-这是文字版内容
-
-# 桥的处理：
-# 1. 提取音频路径 → ffmpeg 转 PCM → pilk 转 SILK
-# 2. 上传到微信 CDN → 发送语音气泡
-# 3. 剩余文字照常发送
-```
-
-> 依赖：`ffmpeg` 和 `pip install pilk`
+**语音回复**：Agent 回复中包含 `[audio:/path/to/file.mp3]`，桥会自动转为微信语音消息。支持 MP3、WAV、OGG 等格式。
 ## 凭证
 
 登录凭证保存在 `~/.wechat-to-anything/credentials.json`，删除即可重新登录。
