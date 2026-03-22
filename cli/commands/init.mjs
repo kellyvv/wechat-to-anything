@@ -1,54 +1,69 @@
-import { loadBuiltinTemplates } from "../lib/templates.mjs";
+import * as p from "@clack/prompts";
+import pc from "picocolors";
+import { writeFile, mkdir } from "node:fs/promises";
+import { resolve } from "node:path";
 
-export default async function init({ root, args }) {
+export default async function init({ root }) {
   console.log();
-  console.log("🌉 wechat-to-anything");
-  console.log();
-  console.log("   一条命令，把微信变成任何 AI Agent 的入口");
-  console.log();
+  p.intro(pc.bgCyan(pc.black(" 🌉 wechat-to-anything ")));
 
-  // Check for --template flag (external template)
-  const templateIdx = args.indexOf("--template");
-  if (templateIdx !== -1 && args[templateIdx + 1]) {
-    console.log(`⚠ External template support coming soon: ${args[templateIdx + 1]}`);
-    console.log("  For now, please use built-in templates.");
-    console.log();
-  }
-
-  // Load built-in templates
-  const templates = await loadBuiltinTemplates();
-  if (templates.length === 0) {
-    console.error("❌ No templates found");
-    process.exit(1);
-  }
-
-  // Display template list
-  console.log("📦 可用模板:\n");
-  templates.forEach((t, i) => {
-    console.log(`  ${i + 1}. ${t.icon || "📦"} ${t.name}`);
-    if (t.description) {
-      console.log(`     ${t.description}`);
-    }
-    console.log();
+  // 只需要一个 API Key
+  const apiKey = await p.text({
+    message: "输入你的 Anthropic API Key",
+    placeholder: "sk-ant-...",
+    validate: (v) => {
+      if (!v || v.trim().length === 0) return "API Key 不能为空";
+    },
   });
 
-  // TODO: Interactive selection with @clack/prompts
-  // For now, show guidance
-  console.log("─".repeat(50));
-  console.log();
-  console.log("🚧 交互式向导正在开发中...");
-  console.log();
-  console.log("目前请手动安装:");
-  console.log();
-  console.log("  # 1. 安装 OpenClaw");
-  console.log("  npm install -g openclaw");
-  console.log();
-  console.log("  # 2. 安装微信插件");
-  console.log("  npx -y @tencent-weixin/openclaw-weixin-cli@latest install");
-  console.log();
-  console.log("  # 3. 配置你的 Agent (参考模板的 template.yaml)");
-  console.log();
-  console.log("  # 4. 启动 Gateway");
-  console.log("  openclaw gateway run");
-  console.log();
+  if (p.isCancel(apiKey)) {
+    p.cancel("已取消");
+    process.exit(0);
+  }
+
+  // 自动生成配置
+  const s = p.spinner();
+  s.start("正在生成配置...");
+
+  const outDir = resolve(root, ".wechat-to-anything");
+  await mkdir(outDir, { recursive: true });
+
+  // .env
+  await writeFile(
+    resolve(outDir, ".env"),
+    `ANTHROPIC_API_KEY=${apiKey.trim()}\n`
+  );
+
+  // openclaw 配置
+  await writeFile(
+    resolve(outDir, "openclaw.config.yaml"),
+    `# 由 wechat-to-anything 自动生成
+providers:
+  default:
+    baseUrl: "https://api.anthropic.com"
+    api: "anthropic"
+    model: "claude-sonnet-4-20250514"
+    apiKey: "\${ANTHROPIC_API_KEY}"
+
+plugins:
+  - "@anthropic-ai/claude-code"
+`
+  );
+
+  s.stop("配置已生成 ✅");
+
+  p.note(
+    [
+      `配置目录: ${pc.dim(outDir)}`,
+      "",
+      pc.cyan("接下来:"),
+      "",
+      `  ${pc.green("1.")} npm install -g openclaw`,
+      `  ${pc.green("2.")} openclaw gateway run`,
+      `  ${pc.green("3.")} 微信扫码 → 搞定 🎉`,
+    ].join("\n"),
+    "下一步"
+  );
+
+  p.outro(pc.green("完成！"));
 }

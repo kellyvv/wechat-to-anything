@@ -1,64 +1,29 @@
 #!/usr/bin/env node
 
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+const [, , command] = process.argv;
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const root = resolve(__dirname, "..");
-
-const [, , command = "init", ...args] = process.argv;
-
-const commands = {
-  init: () => import("../cli/commands/init.mjs"),
-  start: () => import("../cli/commands/start.mjs"),
-  stop: () => import("../cli/commands/stop.mjs"),
-  status: () => import("../cli/commands/status.mjs"),
-  switch: () => import("../cli/commands/switch.mjs"),
-  help: () => showHelp(),
-};
-
-function showHelp() {
+// 默认就是 init，其他命令暂不开放
+if (command === "help" || command === "--help" || command === "-h") {
   console.log(`
-🌉 wechat-to-anything — Connect WeChat to any AI Agent
+🌉 wechat-to-anything
 
 Usage:
-  npx wechat-to-anything <command>
-
-Commands:
-  init      Interactive setup wizard (default)
-  start     Start all services
-  stop      Stop all services
-  status    Show running status
-  switch    Switch to a different Agent template
-  help      Show this help
-
-Examples:
-  npx wechat-to-anything init
-  npx wechat-to-anything init --template @my/agent-template
-  npx wechat-to-anything switch
+  npx wechat-to-anything       交互式配置（默认）
 
 Docs: https://github.com/kellyvv/wechat-to-anything
 `);
+  process.exit(0);
 }
 
-async function main() {
-  if (command === "help" || command === "--help" || command === "-h") {
-    showHelp();
-    return;
-  }
-
-  const loader = commands[command];
-  if (!loader) {
-    console.error(`Unknown command: ${command}`);
-    showHelp();
-    process.exit(1);
-  }
-
-  const mod = await loader();
-  await mod.default({ root, args });
+if (command && command !== "init") {
+  console.error(`未知命令: ${command}`);
+  console.log("直接运行 npx wechat-to-anything 即可");
+  process.exit(1);
 }
 
-main().catch((err) => {
+import("../cli/commands/init.mjs").then((mod) =>
+  mod.default({ root: process.cwd() })
+).catch((err) => {
   console.error(err);
   process.exit(1);
 });

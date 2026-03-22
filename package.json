@@ -1,7 +1,7 @@
 {
   "name": "wechat-to-anything",
   "version": "0.1.0",
-  "description": "Connect WeChat to any AI Agent with one command",
+  "description": "Connect WeChat to Claude Code with one command",
   "type": "module",
   "bin": {
     "wechat-to-anything": "./bin/cli.mjs",
@@ -12,14 +12,10 @@
   },
   "keywords": [
     "wechat",
-    "ai-agent",
+    "claude-code",
     "openclaw",
     "chatbot",
-    "bridge",
-    "dify",
-    "coze",
-    "openher",
-    "ollama"
+    "anthropic"
   ],
   "author": "kellyvv",
   "license": "MIT",
@@ -33,7 +29,6 @@
   },
   "dependencies": {
     "@clack/prompts": "^0.10.0",
-    "js-yaml": "^4.1.0",
     "picocolors": "^1.1.0"
   }
 }
