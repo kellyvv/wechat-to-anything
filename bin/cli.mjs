@@ -49,9 +49,12 @@ while (i < args.length) {
       console.error(pc.red(`无效的 --agent 参数: ${args[i + 1]}，格式: name=url`));
       process.exit(1);
     }
-    try { new URL(url); } catch {
-      console.error(pc.red(`无效的 Agent URL: ${url}`));
-      process.exit(1);
+    // acp:// 或 http(s):// 都接受
+    if (!url.startsWith("acp://")) {
+      try { new URL(url); } catch {
+        console.error(pc.red(`无效的 Agent URL: ${url}`));
+        process.exit(1);
+      }
     }
     agents.set(name.toLowerCase(), url);
     i += 2;
@@ -60,9 +63,11 @@ while (i < args.length) {
     i += 2;
   } else if (!args[i].startsWith("--")) {
     // 向后兼容：裸 URL 参数当作单 Agent
-    try { new URL(args[i]); } catch {
-      console.error(pc.red(`无效的 URL: ${args[i]}`));
-      process.exit(1);
+    if (!args[i].startsWith("acp://")) {
+      try { new URL(args[i]); } catch {
+        console.error(pc.red(`无效的 URL: ${args[i]}`));
+        process.exit(1);
+      }
     }
     agents.set("default", args[i]);
     defaultAgent = "default";

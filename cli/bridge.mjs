@@ -5,6 +5,7 @@ import {
   extractText, extractMedia,
 } from "./weixin.mjs";
 import { downloadAndDecrypt, downloadMediaToFile } from "./cdn.mjs";
+import { callAgentAuto, checkAgent } from "./agent-adapter.mjs";
 
 /**
  * 启动桥：WeChat ilinkai API ←→ Agent HTTP
@@ -50,7 +51,7 @@ export async function start(agents, defaultAgent) {
   for (const [name, url] of agents) {
     console.log(pc.dim(`🔍 检查 Agent ${name}: ${url}`));
     try {
-      await fetch(url, { signal: AbortSignal.timeout(5000) });
+      await checkAgent(url);
       console.log(pc.green(`✅ ${name} 可达`));
     } catch {
       console.error(pc.red(`❌ 无法连接 ${name}: ${url}`));
@@ -262,21 +263,31 @@ export async function start(agents, defaultAgent) {
           let targetAgent = userDefaults.get(from) || defaultAgent;
           let routedText = text;
           if (multiMode && text) {
+            // 先尝试 @name 消息（有空格）
             const atMatch = text.match(/^@(\S+)\s+(.*)$/s);
             if (atMatch && agents.has(atMatch[1].toLowerCase())) {
               targetAgent = atMatch[1].toLowerCase();
               routedText = atMatch[2];
-              // 更新 agentMessages 中的文本
-              if (agentMessages.length === 1 && typeof agentMessages[0].content === "string") {
-                agentMessages[0].content = routedText;
+            } else {
+              // 再尝试 @name消息（无空格）— 遍历已知 agent 名称
+              for (const name of agents.keys()) {
+                if (text.toLowerCase().startsWith(`@${name}`)) {
+                  targetAgent = name;
+                  routedText = text.slice(1 + name.length).trim() || text;
+                  break;
+                }
               }
+            }
+            // 更新 agentMessages 中的文本
+            if (routedText !== text && agentMessages.length === 1 && typeof agentMessages[0].content === "string") {
+              agentMessages[0].content = routedText;
             }
           }
           const agentUrl = agents.get(targetAgent);
 
           // 调用 Agent
           try {
-            const reply = await callAgent(agentUrl, agentMessages);
+            const reply = await callAgentAuto(agentUrl, agentMessages);
             // 检查回复是否包含图片 URL（markdown 格式）
             const imageMatch = reply.match(/!\[.*?\]\((https?:\/\/[^\s)]+)\)/);
             const agentTag = multiMode ? `[${targetAgent}] ` : "";
@@ -317,20 +328,3 @@ export async function start(agents, defaultAgent) {
   await loop();
 }
 
-/**
- * 调用 Agent — 支持纯文本和多模态消息
- */
-async function callAgent(agentUrl, messages) {
-  const res = await fetch(`${agentUrl}/chat/completions`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ messages }),
-    signal: AbortSignal.timeout(300_000),
-  });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`${res.status}: ${text.slice(0, 200)}`);
-  }
-  const data = await res.json();
-  return data.choices?.[0]?.message?.content || "(empty response)";
-}
