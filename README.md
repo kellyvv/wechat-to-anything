@@ -2,7 +2,7 @@
 
 > 把微信变成任何 AI Agent 的前端。零依赖，一条命令。
 
-微信发消息 → Agent 回复。就这么简单。
+微信发消息 → Agent 回复。文本、图片、语音、文件全支持。
 
 ## 原理
 
@@ -11,6 +11,13 @@
 ```
 
 直接调用腾讯 ilinkai 接口收发微信消息，无中间层。你的 Agent 只需暴露一个 OpenAI 兼容的 HTTP 接口（`POST /v1/chat/completions`），任何语言都行。
+
+### 多媒体支持
+
+| 方向 | 图片 | 语音 | 文件 |
+|---|---|---|---|
+| **微信 → Agent** | base64 多模态发送，Agent 能"看到" | 微信自动语音转文字 | 下载并提取文本内容 |
+| **Agent → 微信** | 回复含图片URL自动发图 | 文本回复 | 文本回复 |
 
 ## 前置条件
 
@@ -51,6 +58,8 @@ def chat(request):
 ```
 
 然后 `npx wechat-to-anything http://your-agent:8000/v1`。
+
+**图片支持**：如果 Agent 需要处理图片，消息格式遵循 [OpenAI Vision API](https://platform.openai.com/docs/guides/vision)，`content` 为数组，包含 `text` 和 `image_url`（base64）。
 
 ## 凭证
 

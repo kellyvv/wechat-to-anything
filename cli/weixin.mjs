@@ -14,7 +14,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { homedir } from "node:os";
 
-const BASE_URL = "https://ilinkai.weixin.qq.com";
+export const BASE_URL = "https://ilinkai.weixin.qq.com";
 const LONG_POLL_TIMEOUT_MS = 35_000;
 const API_TIMEOUT_MS = 15_000;
 const BOT_TYPE = "3";
@@ -115,7 +115,7 @@ export async function loginWithQR(onQrCode) {
 
 // ─── 消息 API ───────────────────────────────────────────────────────
 
-function buildHeaders(token, bodyStr) {
+export function buildHeaders(token, bodyStr) {
   const uin = crypto.randomBytes(4).readUInt32BE(0);
   return {
     "Content-Type": "application/json",
@@ -186,11 +186,133 @@ export async function sendMessage(token, to, text, contextToken) {
   );
 }
 
+/**
+ * 发送图片消息（通过 CDN 引用）
+ */
+export async function sendImageMessage(token, to, contextToken, uploaded) {
+  await apiPost(
+    "ilink/bot/sendmessage",
+    {
+      msg: {
+        from_user_id: "",
+        to_user_id: to,
+        client_id: crypto.randomUUID(),
+        message_type: 2,
+        message_state: 2,
+        item_list: [{
+          type: 2, // IMAGE
+          image_item: {
+            media: {
+              encrypt_query_param: uploaded.downloadParam,
+              aes_key: Buffer.from(uploaded.aeskey, "hex").toString("base64"),
+              encrypt_type: 1,
+            },
+            mid_size: uploaded.fileSizeCiphertext,
+          },
+        }],
+        context_token: contextToken,
+      },
+      base_info: {},
+    },
+    token,
+    API_TIMEOUT_MS
+  );
+}
+
+/**
+ * 发送文件消息（通过 CDN 引用）
+ */
+export async function sendFileMessage(token, to, contextToken, uploaded, fileName) {
+  await apiPost(
+    "ilink/bot/sendmessage",
+    {
+      msg: {
+        from_user_id: "",
+        to_user_id: to,
+        client_id: crypto.randomUUID(),
+        message_type: 2,
+        message_state: 2,
+        item_list: [{
+          type: 4, // FILE
+          file_item: {
+            media: {
+              encrypt_query_param: uploaded.downloadParam,
+              aes_key: Buffer.from(uploaded.aeskey, "hex").toString("base64"),
+              encrypt_type: 1,
+            },
+            file_name: fileName,
+            len: String(uploaded.fileSize),
+          },
+        }],
+        context_token: contextToken,
+      },
+      base_info: {},
+    },
+    token,
+    API_TIMEOUT_MS
+  );
+}
+
+/**
+ * 提取消息文本（支持语音转文字）
+ */
 export function extractText(msg) {
   const items = msg.item_list || [];
   for (const item of items) {
     if (item.type === 1 && item.text_item?.text) return item.text_item.text;
+    // 语音转文字（微信自带）
     if (item.type === 3 && item.voice_item?.text) return item.voice_item.text;
   }
   return "";
 }
+
+/**
+ * 提取多媒体信息
+ * @returns {{ type: 'image'|'voice'|'file'|'video', encryptQueryParam, aesKey, fileName?, voiceText? } | null}
+ */
+export function extractMedia(msg) {
+  const items = msg.item_list || [];
+  for (const item of items) {
+    // 图片
+    if (item.type === 2 && item.image_item?.media?.encrypt_query_param) {
+      const img = item.image_item;
+      // 图片 AES key 可能在 image_item.aeskey (hex) 或 media.aes_key (base64)
+      const aesKey = img.aeskey
+        ? Buffer.from(img.aeskey, "hex").toString("base64")
+        : img.media.aes_key;
+      return {
+        type: "image",
+        encryptQueryParam: img.media.encrypt_query_param,
+        aesKey, // 可能 undefined（不加密的图片）
+      };
+    }
+    // 语音
+    if (item.type === 3 && item.voice_item?.media?.encrypt_query_param) {
+      return {
+        type: "voice",
+        encryptQueryParam: item.voice_item.media.encrypt_query_param,
+        aesKey: item.voice_item.media.aes_key,
+        voiceText: item.voice_item.text || null, // 微信自带语音转文字
+      };
+    }
+    // 文件
+    if (item.type === 4 && item.file_item?.media?.encrypt_query_param) {
+      return {
+        type: "file",
+        encryptQueryParam: item.file_item.media.encrypt_query_param,
+        aesKey: item.file_item.media.aes_key,
+        fileName: item.file_item.file_name || "file.bin",
+      };
+    }
+    // 视频
+    if (item.type === 5 && item.video_item?.media?.encrypt_query_param) {
+      return {
+        type: "video",
+        encryptQueryParam: item.video_item.media.encrypt_query_param,
+        aesKey: item.video_item.media.aes_key,
+      };
+    }
+  }
+  return null;
+}
+
