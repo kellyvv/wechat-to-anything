@@ -288,10 +288,60 @@ export async function start(agents, defaultAgent) {
           // 调用 Agent
           try {
             const reply = await callAgentAuto(agentUrl, agentMessages);
+            const agentTag = multiMode ? `[${targetAgent}] ` : "";
+
+            // 检查回复是否包含 [audio:path/url]
+            const audioMatch = reply.match(/\[audio:(.*?)\]/);
             // 检查回复是否包含图片 URL（markdown 格式）
             const imageMatch = reply.match(/!\[.*?\]\((https?:\/\/[^\s)]+)\)/);
-            const agentTag = multiMode ? `[${targetAgent}] ` : "";
-            if (imageMatch) {
+
+            if (audioMatch) {
+              const audioSrc = audioMatch[1];
+              const textPart = reply.replace(/\[audio:.*?\]/g, "").trim();
+              console.log(pc.green(`→ [${targetAgent}] [语音] ${audioSrc.slice(0, 60)}`));
+              try {
+                const { execSync } = await import("node:child_process");
+                const { statSync, writeFileSync } = await import("node:fs");
+                const { uploadToCdn } = await import("./cdn.mjs");
+                const { buildHeaders, BASE_URL: baseUrl } = await import("./weixin.mjs");
+
+                // 下载或使用本地文件
+                let audioFile = audioSrc;
+                if (audioSrc.startsWith("http://") || audioSrc.startsWith("https://")) {
+                  const resp = await fetch(audioSrc);
+                  if (!resp.ok) throw new Error(`下载失败: ${resp.status}`);
+                  writeFileSync("/tmp/wxta_audio_in.mp3", Buffer.from(await resp.arrayBuffer()));
+                  audioFile = "/tmp/wxta_audio_in.mp3";
+                }
+
+                // 转码: audio → PCM(16kHz) → SILK
+                execSync(`ffmpeg -y -i "${audioFile}" -ar 16000 -ac 1 -f s16le /tmp/wxta_audio.pcm 2>/dev/null`);
+                execSync(`python3 -c "import pilk; pilk.encode('/tmp/wxta_audio.pcm', '/tmp/wxta_audio.silk', pcm_rate=16000, tencent=True)"`);
+                const pcmSize = statSync("/tmp/wxta_audio.pcm").size;
+                const durationMs = Math.round((pcmSize / 32000) * 1000);
+
+                // CDN 上传 + 发送语音
+                const cdn = await uploadToCdn("/tmp/wxta_audio.silk", from, creds.token, 4);
+                const aesKeyB64 = Buffer.from(cdn.aeskey).toString("base64");
+
+                const voiceBody = {
+                  to_user: from,
+                  voice_item: {
+                    voice_url: cdn.file_url, aes_buf_key: aesKeyB64,
+                    file_id: cdn.file_id, voice_length: durationMs, voice_format: 4,
+                  },
+                };
+                const headers = buildHeaders(creds.token, contextToken);
+                await fetch(`${baseUrl}/cgi-bin/mmchatgpt-wechat/sendvoicemessage`, {
+                  method: "POST", headers, body: JSON.stringify(voiceBody),
+                });
+                console.log(pc.green(`→ [语音] 已发送 (${durationMs}ms)`));
+                if (textPart) await sendMessage(creds.token, from, agentTag + textPart, contextToken);
+              } catch (err) {
+                console.error(pc.red(`   语音发送失败: ${err.message}`));
+                await sendMessage(creds.token, from, agentTag + reply.replace(/\[audio:.*?\]/g, "").trim() || reply, contextToken);
+              }
+            } else if (imageMatch) {
               // Agent 回复了图片 URL → 直接发到微信
               const imageUrl = imageMatch[1];
               const textPart = reply.replace(/!\[.*?\]\(https?:\/\/[^\s)]+\)/g, "").trim();
