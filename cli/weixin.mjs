@@ -187,9 +187,24 @@ export async function sendMessage(token, to, text, contextToken) {
 }
 
 /**
- * 发送图片消息（通过 URL 直接发送）
+ * 发送图片消息（下载 → CDN 上传 → 发送）
  */
 export async function sendImageByUrl(token, to, contextToken, imageUrl) {
+  const { writeFile: wf } = await import("node:fs/promises");
+
+  // 下载图片
+  const resp = await fetch(imageUrl);
+  if (!resp.ok) throw new Error(`图片下载失败: ${resp.status}`);
+  const buf = Buffer.from(await resp.arrayBuffer());
+  const tmpPath = "/tmp/wxta_image_send.jpg";
+  await wf(tmpPath, buf);
+
+  // CDN 上传 (mediaType=1 = IMAGE)
+  const { uploadToCdn } = await import("./cdn.mjs");
+  const cdn = await uploadToCdn(tmpPath, to, token, 1);
+  const aesKeyB64 = Buffer.from(cdn.aeskey).toString("base64");
+
+  // 发送
   await apiPost(
     "ilink/bot/sendmessage",
     {
@@ -202,7 +217,10 @@ export async function sendImageByUrl(token, to, contextToken, imageUrl) {
         item_list: [{
           type: 2, // IMAGE
           image_item: {
-            url: imageUrl,
+            media: {
+              encrypt_query_param: cdn.downloadParam,
+              aes_key: aesKeyB64,
+            },
           },
         }],
         context_token: contextToken,
