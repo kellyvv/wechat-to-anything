@@ -1,6 +1,6 @@
 {
   "name": "wechat-to-anything",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "一条命令，把微信变成任何 AI Agent 的入口",
   "type": "module",
   "bin": {
