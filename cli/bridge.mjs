@@ -1,15 +1,10 @@
 import pc from "picocolors";
-import { writeFile, mkdir } from "node:fs/promises";
-import { resolve } from "node:path";
-import { homedir } from "node:os";
 import {
   loadCredentials, loginWithQR, getUpdates,
-  sendMessage, sendImageMessage, sendFileMessage,
+  sendMessage, sendImageByUrl,
   extractText, extractMedia,
 } from "./weixin.mjs";
-import { downloadAndDecrypt, downloadMediaToFile, uploadToCdn } from "./cdn.mjs";
-
-const MEDIA_DIR = resolve(homedir(), ".wechat-to-anything", "media");
+import { downloadAndDecrypt, downloadMediaToFile } from "./cdn.mjs";
 
 /**
  * 启动桥：WeChat ilinkai API ←→ Agent HTTP
@@ -159,26 +154,13 @@ export async function start(agentUrl) {
             // 检查回复是否包含图片 URL（markdown 格式）
             const imageMatch = reply.match(/!\[.*?\]\((https?:\/\/[^\s)]+)\)/);
             if (imageMatch) {
-              // Agent 回复了图片
+              // Agent 回复了图片 URL → 直接发到微信
               const imageUrl = imageMatch[1];
               const textPart = reply.replace(/!\[.*?\]\(https?:\/\/[^\s)]+\)/g, "").trim();
               console.log(pc.green(`→ [Agent] [图片] ${imageUrl.slice(0, 60)}`));
               try {
-                // 下载图片到临时文件
-                await mkdir(MEDIA_DIR, { recursive: true });
-                const imgRes = await fetch(imageUrl);
-                if (imgRes.ok) {
-                  const imgBuf = Buffer.from(await imgRes.arrayBuffer());
-                  const tmpPath = resolve(MEDIA_DIR, `out-${Date.now()}.jpg`);
-                  await writeFile(tmpPath, imgBuf);
-                  // 上传到 CDN 并发送
-                  const uploaded = await uploadToCdn(tmpPath, from, creds.token, 1);
-                  if (textPart) await sendMessage(creds.token, from, textPart, contextToken);
-                  await sendImageMessage(creds.token, from, contextToken, uploaded);
-                } else {
-                  // 下载失败，发文本
-                  await sendMessage(creds.token, from, reply, contextToken);
-                }
+                if (textPart) await sendMessage(creds.token, from, textPart, contextToken);
+                await sendImageByUrl(creds.token, from, contextToken, imageUrl);
               } catch (err) {
                 console.error(pc.red(`   图片发送失败: ${err.message}`));
                 await sendMessage(creds.token, from, reply, contextToken);

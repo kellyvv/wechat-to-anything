@@ -187,9 +187,9 @@ export async function sendMessage(token, to, text, contextToken) {
 }
 
 /**
- * 发送图片消息（通过 CDN 引用）
+ * 发送图片消息（通过 URL 直接发送）
  */
-export async function sendImageMessage(token, to, contextToken, uploaded) {
+export async function sendImageByUrl(token, to, contextToken, imageUrl) {
   await apiPost(
     "ilink/bot/sendmessage",
     {
@@ -202,12 +202,7 @@ export async function sendImageMessage(token, to, contextToken, uploaded) {
         item_list: [{
           type: 2, // IMAGE
           image_item: {
-            media: {
-              encrypt_query_param: uploaded.downloadParam,
-              aes_key: Buffer.from(uploaded.aeskey, "hex").toString("base64"),
-              encrypt_type: 1,
-            },
-            mid_size: uploaded.fileSizeCiphertext,
+            url: imageUrl,
           },
         }],
         context_token: contextToken,
