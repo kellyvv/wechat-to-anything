@@ -229,6 +229,9 @@ export async function sendImageByUrl(token, to, contextToken, imageUrl) {
       encrypt_query_param: cdn.thumbDownloadParam,
       aes_key: aesKeyB64,
     };
+    imageItem.thumb_size = cdn.thumbSizeCiphertext;
+    imageItem.thumb_width = cdn.thumbWidth;
+    imageItem.thumb_height = cdn.thumbHeight;
   }
 
   // 发送

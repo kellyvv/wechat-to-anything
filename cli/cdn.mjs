@@ -99,6 +99,16 @@ export async function uploadImageWithThumb(filePath, toUserId, token) {
   }
   const thumb = await readFile(thumbPath);
 
+  // 获取缩略图尺寸
+  let thumbWidth = 120, thumbHeight = 120;
+  try {
+    const sipsOut = execSync(`sips -g pixelWidth -g pixelHeight "${thumbPath}" 2>/dev/null`).toString();
+    const wm = sipsOut.match(/pixelWidth:\s*(\d+)/);
+    const hm = sipsOut.match(/pixelHeight:\s*(\d+)/);
+    if (wm) thumbWidth = parseInt(wm[1]);
+    if (hm) thumbHeight = parseInt(hm[1]);
+  } catch {}
+
   // 1. getUploadUrl（带缩略图信息）
   const uploadBody = JSON.stringify({
     filekey,
@@ -157,6 +167,9 @@ export async function uploadImageWithThumb(filePath, toUserId, token) {
     aeskey: aeskey.toString("hex"),
     fileSize: rawsize,
     fileSizeCiphertext: filesize,
+    thumbSizeCiphertext: aesEcbPaddedSize(thumb.length),
+    thumbWidth,
+    thumbHeight,
     filekey,
   };
 }
