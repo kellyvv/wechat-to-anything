@@ -128,7 +128,7 @@ npx wechat-to-anything \
 }
 ```
 
-**图片（Agent → 微信）**：回复中包含 `![desc](https://...)` 自动发图。
+**图片（Agent → 微信）**：回复中包含 `![desc](https://...)` 自动发图（HD 原图质量，自动生成缩略图）。支持 URL、本地路径、data URI。
 
 **语音（Agent → 微信）**：回复中包含 `[audio:path 或 URL]` 自动发语音气泡。支持 MP3、WAV、OGG 等。需要 `ffmpeg` 和 `pip install pilk`。
 
