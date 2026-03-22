@@ -1,11 +1,14 @@
 import pc from "picocolors";
 import {
   loadCredentials, loginWithQR, getUpdates,
-  sendMessage, sendImageByUrl,
+  sendMessage, sendImageByUrl, sendVideoByUrl,
   extractText, extractMedia,
+  getConfig, sendTyping,
 } from "./weixin.mjs";
-import { downloadAndDecrypt, downloadMediaToFile } from "./cdn.mjs";
+import { downloadAndDecrypt, downloadMediaToFile, uploadToCdn } from "./cdn.mjs";
 import { callAgentAuto, checkAgent } from "./agent-adapter.mjs";
+import { createTypingController } from "./typing.mjs";
+import { stripMarkdown } from "./markdown.mjs";
 
 /**
  * 启动桥：WeChat ilinkai API ←→ Agent HTTP
@@ -73,6 +76,28 @@ export async function start(agents, defaultAgent) {
   console.log();
 
   let getUpdatesBuf = "";
+
+  // typing_ticket 缓存（参考 openclaw-weixin config-cache.ts: 24h TTL）
+  const typingTickets = new Map(); // userId → { ticket, fetchedAt }
+  const TICKET_TTL = 24 * 60 * 60_000; // 24h
+
+  async function getTypingTicket(userId, contextToken) {
+    const cached = typingTickets.get(userId);
+    if (cached && (Date.now() - cached.fetchedAt) < TICKET_TTL) {
+      return cached.ticket;
+    }
+    try {
+      const cfg = await getConfig(creds.token, userId, contextToken);
+      const ticket = cfg?.typing_ticket || "";
+      if (ticket) {
+        typingTickets.set(userId, { ticket, fetchedAt: Date.now() });
+        console.log(pc.dim(`   typing_ticket cached for ${userId.slice(0, 8)}...`));
+      }
+      return ticket;
+    } catch {
+      return cached?.ticket || "";
+    }
+  }
 
   // 每用户图片缓存：发图片时先存着，等下一条文字消息再合并发出
   const pendingImages = new Map(); // userId → { base64, timestamp }
@@ -285,15 +310,33 @@ export async function start(agents, defaultAgent) {
           }
           const agentUrl = agents.get(targetAgent);
 
+          // Typing 指示器：Agent 思考期间显示"正在输入..."
+          const typingTicket = await getTypingTicket(from, contextToken);
+          const typing = typingTicket
+            ? createTypingController({
+                start: () => sendTyping(creds.token, from, typingTicket, 1),
+                stop:  () => sendTyping(creds.token, from, typingTicket, 2),
+                onError: (err) => console.error(pc.dim(`   typing: ${err.message}`)),
+                keepaliveMs: 5000,
+                maxDurationMs: 60_000,
+              })
+            : null;
+
           // 调用 Agent
           try {
+            if (typing) await typing.onReplyStart();
             const reply = await callAgentAuto(agentUrl, agentMessages);
+            if (typing) typing.onIdle();
             const agentTag = multiMode ? `[${targetAgent}] ` : "";
 
             // 检查回复是否包含 [audio:path/url]
             const audioMatch = reply.match(/\[audio:(.*?)\]/);
             // 检查回复是否包含图片（markdown 格式，支持 URL 和 data URI）
             const imageMatch = reply.match(/!\[.*?\]\(((?:https?:\/\/|data:image\/)[^\s)]+)\)/);
+            // 检查回复是否包含 [video:path/url]
+            const videoMatch = reply.match(/\[video:(.*?)\]/);
+            // 检查回复是否包含 [file:path/url]
+            const fileMatch = reply.match(/\[file:(.*?)\]/);
 
             if (audioMatch) {
               const audioSrc = audioMatch[1];
@@ -353,7 +396,7 @@ export async function start(agents, defaultAgent) {
                   body,
                 });
                 console.log(pc.green(`→ [语音] 已发送 (${durationMs}ms)`));
-                if (textPart) await sendMessage(creds.token, from, agentTag + textPart, contextToken);
+                if (textPart) await sendMessage(creds.token, from, agentTag + stripMarkdown(textPart), contextToken);
               } catch (err) {
                 console.error(pc.red(`   语音发送失败: ${err.message}`));
                 await sendMessage(creds.token, from, agentTag + reply.replace(/\[audio:.*?\]/g, "").trim() || reply, contextToken);
@@ -364,18 +407,58 @@ export async function start(agents, defaultAgent) {
               const textPart = reply.replace(/!\[.*?\]\(https?:\/\/[^\s)]+\)/g, "").trim();
               console.log(pc.green(`→ [${targetAgent}] [图片] ${imageUrl.slice(0, 60)}`));
               try {
-                if (textPart) await sendMessage(creds.token, from, agentTag + textPart, contextToken);
+                if (textPart) await sendMessage(creds.token, from, agentTag + stripMarkdown(textPart), contextToken);
                 await sendImageByUrl(creds.token, from, contextToken, imageUrl);
               } catch (err) {
                 console.error(pc.red(`   图片发送失败: ${err.message}`));
                 await sendMessage(creds.token, from, agentTag + reply, contextToken);
               }
+            } else if (videoMatch) {
+              // Agent 回复了视频 → CDN 上传发到微信
+              const videoSrc = videoMatch[1];
+              const textPart = reply.replace(/\[video:.*?\]/g, "").trim();
+              console.log(pc.green(`→ [${targetAgent}] [视频] ${videoSrc.slice(0, 60)}`));
+              try {
+                if (textPart) await sendMessage(creds.token, from, agentTag + stripMarkdown(textPart), contextToken);
+                await sendVideoByUrl(creds.token, from, contextToken, videoSrc);
+              } catch (err) {
+                console.error(pc.red(`   视频发送失败: ${err.message}`));
+                await sendMessage(creds.token, from, agentTag + stripMarkdown(reply), contextToken);
+              }
+            } else if (fileMatch) {
+              // Agent 回复了文件 → CDN 上传发到微信
+              const fileSrc = fileMatch[1];
+              const textPart = reply.replace(/\[file:.*?\]/g, "").trim();
+              const fileName = fileSrc.split("/").pop() || "file";
+              console.log(pc.green(`→ [${targetAgent}] [文件] ${fileSrc.slice(0, 60)}`));
+              try {
+                const { writeFileSync, unlinkSync } = await import("node:fs");
+                const { tmpdir } = await import("node:os");
+                const { join } = await import("node:path");
+                const resp = await fetch(fileSrc);
+                if (!resp.ok) throw new Error(`file download failed: ${resp.status}`);
+                const buf = Buffer.from(await resp.arrayBuffer());
+                const tmpPath = join(tmpdir(), `wx-file-${Date.now()}-${fileName}`);
+                writeFileSync(tmpPath, buf);
+                try {
+                  const uploaded = await uploadToCdn(tmpPath, from, creds.token, 3);
+                  const { sendFileMessage } = await import("./weixin.mjs");
+                  await sendFileMessage(creds.token, from, contextToken, uploaded, fileName);
+                  if (textPart) await sendMessage(creds.token, from, agentTag + stripMarkdown(textPart), contextToken);
+                } finally {
+                  try { unlinkSync(tmpPath); } catch {}
+                }
+              } catch (err) {
+                console.error(pc.red(`   文件发送失败: ${err.message}`));
+                await sendMessage(creds.token, from, agentTag + stripMarkdown(reply), contextToken);
+              }
             } else {
               // 纯文本回复
               console.log(pc.green(`→ [${targetAgent}] ${reply.slice(0, 80)}${reply.length > 80 ? "..." : ""}`));
-              await sendMessage(creds.token, from, agentTag + reply, contextToken);
+              await sendMessage(creds.token, from, agentTag + stripMarkdown(reply), contextToken);
             }
           } catch (err) {
+            if (typing) typing.onCleanup();
             console.error(pc.red(`   ${targetAgent} 错误: ${err.message}`));
             await sendMessage(creds.token, from, `⚠️ ${targetAgent} 错误: ${err.message}`, contextToken);
           }

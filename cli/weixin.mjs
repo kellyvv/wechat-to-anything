@@ -10,9 +10,9 @@
  */
 
 import crypto from "node:crypto";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
-import { homedir } from "node:os";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync } from "node:fs";
+import { resolve, join } from "node:path";
+import { homedir, tmpdir } from "node:os";
 
 export const BASE_URL = "https://ilinkai.weixin.qq.com";
 const LONG_POLL_TIMEOUT_MS = 35_000;
@@ -315,6 +315,83 @@ export async function sendFileMessage(token, to, contextToken, uploaded, fileNam
     },
     token,
     API_TIMEOUT_MS
+  );
+}
+
+/**
+ * 发送视频消息（通过 URL 下载 → CDN 上传 → 发送）
+ * 参考: openclaw-weixin send.ts#L209-233 (sendVideoMessageWeixin)
+ */
+export async function sendVideoByUrl(token, to, contextToken, videoUrl) {
+  const { uploadToCdn } = await import("./cdn.mjs");
+
+  // 下载视频
+  const resp = await fetch(videoUrl);
+  if (!resp.ok) throw new Error(`video download failed: ${resp.status}`);
+  const buf = Buffer.from(await resp.arrayBuffer());
+  const tmpPath = join(tmpdir(), `wx-video-${Date.now()}.mp4`);
+  writeFileSync(tmpPath, buf);
+
+  try {
+    // CDN 上传 (mediaType=2=VIDEO)
+    const uploaded = await uploadToCdn(tmpPath, to, token, 2);
+
+    // 发送 type:5 video_item
+    await apiPost(
+      "ilink/bot/sendmessage",
+      {
+        msg: {
+          from_user_id: "",
+          to_user_id: to,
+          client_id: crypto.randomUUID(),
+          message_type: 2,
+          message_state: 2,
+          item_list: [{
+            type: 5, // VIDEO
+            video_item: {
+              media: {
+                encrypt_query_param: uploaded.downloadParam,
+                aes_key: Buffer.from(uploaded.aeskey, "hex").toString("base64"),
+              },
+              video_size: uploaded.ciphertextSize,
+            },
+          }],
+          context_token: contextToken,
+        },
+        base_info: {},
+      },
+      token,
+      API_TIMEOUT_MS
+    );
+  } finally {
+    try { unlinkSync(tmpPath); } catch {}
+  }
+}
+
+/**
+ * 获取 bot 配置（含 typing_ticket）
+ * 参考: openclaw-weixin api.ts#L209-226
+ */
+export async function getConfig(token, userId, contextToken) {
+  return apiPost(
+    "ilink/bot/getconfig",
+    { ilink_user_id: userId, context_token: contextToken },
+    token,
+    10_000
+  );
+}
+
+/**
+ * 发送打字指示器
+ * 参考: openclaw-weixin api.ts#L228-240
+ * @param {number} status — 1=typing, 2=cancel
+ */
+export async function sendTyping(token, userId, typingTicket, status = 1) {
+  return apiPost(
+    "ilink/bot/sendtyping",
+    { ilink_user_id: userId, typing_ticket: typingTicket, status },
+    token,
+    10_000
   );
 }
 
