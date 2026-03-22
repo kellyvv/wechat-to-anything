@@ -113,8 +113,10 @@ export async function uploadToCdn(filePath, toUserId, token, mediaType = 1) {
     body: uploadBody,
   });
   if (!uploadRes.ok) throw new Error(`getUploadUrl failed: ${uploadRes.status}`);
-  const { upload_param } = await uploadRes.json();
-  if (!upload_param) throw new Error("getUploadUrl: no upload_param");
+  const uploadJson = await uploadRes.json();
+
+  const { upload_param } = uploadJson;
+  if (!upload_param) throw new Error(`getUploadUrl: no upload_param, response: ${JSON.stringify(uploadJson)}`);
 
   // 2. 加密 + 上传到 CDN
   const ciphertext = encryptAesEcb(plaintext, aeskey);
@@ -124,9 +126,13 @@ export async function uploadToCdn(filePath, toUserId, token, mediaType = 1) {
     headers: { "Content-Type": "application/octet-stream" },
     body: new Uint8Array(ciphertext),
   });
-  if (cdnRes.status !== 200) throw new Error(`CDN upload failed: ${cdnRes.status}`);
-  const downloadParam = cdnRes.headers.get("x-encrypted-param");
-  if (!downloadParam) throw new Error("CDN upload: missing x-encrypted-param");
+  if (cdnRes.status !== 200) {
+    const body = await cdnRes.text();
+    throw new Error(`CDN upload failed: ${cdnRes.status} ${body}`);
+  }
+  // x-encrypted-query-param 匹配下载 URL 参数名 encrypted_query_param
+  const downloadParam = cdnRes.headers.get("x-encrypted-query-param") || cdnRes.headers.get("x-encrypted-param");
+  if (!downloadParam) throw new Error("CDN upload: missing download param header");
 
   return {
     downloadParam,
