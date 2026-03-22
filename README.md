@@ -104,20 +104,6 @@ def chat(request):
 
 **图片回复**：Agent 回复中包含 markdown 图片 `![desc](https://...)` 会自动作为图片消息发到微信。
 
-## 项目结构
-
-```
-wechat-to-anything/
-├── bin/cli.mjs            # CLI 入口
-├── cli/
-│   ├── weixin.mjs         # 微信 ilinkai API（登录/收发消息）
-│   ├── bridge.mjs         # 桥：微信 ←→ Agent（多媒体处理）
-│   └── cdn.mjs            # CDN 加解密（下载图片/语音/文件）
-├── examples/
-│   ├── claude-code/       # Claude Code Agent 示例
-│   └── openai/            # OpenAI Codex Agent 示例（支持图片）
-└── package.json
-```
 
 ## 凭证
 
