@@ -32,6 +32,12 @@ ${pc.bold("参数:")}
   --openclaw            ${pc.dim("内置 OpenClaw（需先 npm i -g openclaw）")}
   --agent ${pc.dim("name=url")}    ${pc.dim("注册自定义 Agent")}
   --default ${pc.dim("name")}      ${pc.dim("设置默认 Agent")}
+  --port ${pc.dim("PORT")}        ${pc.dim("API 端口（默认 9099），暴露 POST /api/send")}
+
+${pc.bold("API:")}
+  POST http://localhost:PORT/api/send
+  ${pc.dim('{ "to": "user_id", "content": "消息内容" }')}
+  ${pc.dim("Agent 可主动推送多条消息，模拟真人节奏")}
 
 ${pc.dim("Docs: https://github.com/kellyvv/wechat-to-anything")}
 `);
@@ -40,6 +46,7 @@ ${pc.dim("Docs: https://github.com/kellyvv/wechat-to-anything")}
 
 // 解析参数
 let i = 0;
+let port = 9099;
 while (i < args.length) {
   if (args[i] === "--codex") {
     agents.set("codex", "cli://codex");
@@ -70,6 +77,13 @@ while (i < args.length) {
     i += 2;
   } else if (args[i] === "--default" && args[i + 1]) {
     defaultAgent = args[i + 1].toLowerCase();
+    i += 2;
+  } else if (args[i] === "--port" && args[i + 1]) {
+    port = parseInt(args[i + 1], 10);
+    if (isNaN(port)) {
+      console.error(pc.red(`无效的端口号: ${args[i + 1]}`));
+      process.exit(1);
+    }
     i += 2;
   } else if (!args[i].startsWith("--")) {
     if (!args[i].startsWith("acp://")) {
@@ -114,7 +128,7 @@ if (agents.size === 1 && agents.has("default")) {
 }
 console.log();
 
-import("../cli/bridge.mjs").then((mod) => mod.start(agents, defaultAgent)).catch((err) => {
+import("../cli/bridge.mjs").then((mod) => mod.start(agents, defaultAgent, { port })).catch((err) => {
   console.error(pc.red(err.message));
   process.exit(1);
 });

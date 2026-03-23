@@ -1,4 +1,5 @@
 import pc from "picocolors";
+import { createServer } from "node:http";
 import {
   loadCredentials, loginWithQR, getUpdates,
   sendMessage, sendImageByUrl, sendVideoByUrl,
@@ -14,7 +15,7 @@ import { stripMarkdown } from "./markdown.mjs";
  * 启动桥：WeChat ilinkai API ←→ Agent HTTP
  * 支持文本 + 图片 + 语音 + 文件，双向
  */
-export async function start(agents, defaultAgent) {
+export async function start(agents, defaultAgent, { port = 9099 } = {}) {
   // 兼容旧的单 URL 调用
   if (typeof agents === "string") {
     const url = agents;
@@ -103,6 +104,177 @@ export async function start(agents, defaultAgent) {
   const pendingImages = new Map(); // userId → { base64, timestamp }
   const IMAGE_BUFFER_TTL = 5 * 60_000; // 5 min 过期
 
+  // per-user contextToken 缓存（供 /api/send 使用）
+  const userContextTokens = new Map(); // userId → contextToken
+
+  /**
+   * 统一发送内容（纯文本 / 图片 / 语音 / 视频 / 文件）
+   * 复用 Agent 回复的多媒体协议格式
+   */
+  async function sendContent(to, content, tag = "") {
+    const ct = userContextTokens.get(to) || "";
+
+    // 检查回复是否包含 [audio:path/url]
+    const audioMatch = content.match(/\[audio:(.*?)\]/);
+    // 检查回复是否包含图片（markdown 格式，支持 URL 和 data URI）
+    const imageMatch = content.match(/!\[.*?\]\(((?:https?:\/\/|data:image\/|\/).+?)\)/);
+    // 检查回复是否包含 [video:path/url]
+    const videoMatch = content.match(/\[video:(.*?)\]/);
+    // 检查回复是否包含 [file:path/url]
+    const fileMatch = content.match(/\[file:(.*?)\]/);
+
+    if (audioMatch) {
+      const audioSrc = audioMatch[1];
+      const textPart = content.replace(/\[audio:.*?\]/g, "").trim();
+      console.log(pc.green(`→ [send] [语音] ${audioSrc.slice(0, 60)}`));
+      try {
+        const { execSync } = await import("node:child_process");
+        const { statSync, writeFileSync } = await import("node:fs");
+        const { uploadToCdn } = await import("./cdn.mjs");
+        const { buildHeaders, BASE_URL: baseUrl } = await import("./weixin.mjs");
+
+        let audioFile = audioSrc;
+        if (audioSrc.startsWith("http://") || audioSrc.startsWith("https://")) {
+          const resp = await fetch(audioSrc);
+          if (!resp.ok) throw new Error(`下载失败: ${resp.status}`);
+          writeFileSync("/tmp/wxta_audio_in.mp3", Buffer.from(await resp.arrayBuffer()));
+          audioFile = "/tmp/wxta_audio_in.mp3";
+        }
+
+        execSync(`ffmpeg -y -i "${audioFile}" -ar 16000 -ac 1 -f s16le /tmp/wxta_audio.pcm 2>/dev/null`);
+        execSync(`python3 -c "import pilk; pilk.encode('/tmp/wxta_audio.pcm', '/tmp/wxta_audio.silk', pcm_rate=16000, tencent=True)"`);
+        const pcmSize = statSync("/tmp/wxta_audio.pcm").size;
+        const durationMs = Math.round((pcmSize / 32000) * 1000);
+
+        const cdn = await uploadToCdn("/tmp/wxta_audio.silk", to, creds.token, 4);
+        const aesKeyB64 = Buffer.from(cdn.aeskey).toString("base64");
+        const crypto = await import("node:crypto");
+
+        const body = JSON.stringify({
+          msg: {
+            from_user_id: "", to_user_id: to,
+            client_id: crypto.randomUUID(),
+            message_type: 2, message_state: 2,
+            item_list: [{
+              type: 3,
+              voice_item: {
+                media: { encrypt_query_param: cdn.downloadParam, aes_key: aesKeyB64 },
+                encode_type: 4, bits_per_sample: 16, sample_rate: 16000, playtime: durationMs,
+              },
+            }],
+            context_token: ct,
+          },
+          base_info: {},
+        });
+        await fetch(`${baseUrl}/ilink/bot/sendmessage`, {
+          method: "POST", headers: buildHeaders(creds.token, body), body,
+        });
+        console.log(pc.green(`→ [语音] 已发送 (${durationMs}ms)`));
+        if (textPart) await sendMessage(creds.token, to, tag + stripMarkdown(textPart), ct);
+      } catch (err) {
+        console.error(pc.red(`   语音发送失败: ${err.message}`));
+        await sendMessage(creds.token, to, tag + content.replace(/\[audio:.*?\]/g, "").trim() || content, ct);
+      }
+    } else if (imageMatch) {
+      const imageUrl = imageMatch[1];
+      const textPart = content.replace(/!\[.*?\]\(((?:https?:\/\/|data:image\/|\/).+?)\)/g, "").trim();
+      console.log(pc.green(`→ [send] [图片] ${imageUrl.slice(0, 60)}`));
+      try {
+        if (textPart) await sendMessage(creds.token, to, tag + stripMarkdown(textPart), ct);
+        await sendImageByUrl(creds.token, to, ct, imageUrl);
+      } catch (err) {
+        console.error(pc.red(`   图片发送失败: ${err.message}`));
+        await sendMessage(creds.token, to, tag + content, ct);
+      }
+    } else if (videoMatch) {
+      const videoSrc = videoMatch[1];
+      const textPart = content.replace(/\[video:.*?\]/g, "").trim();
+      console.log(pc.green(`→ [send] [视频] ${videoSrc.slice(0, 60)}`));
+      try {
+        if (textPart) await sendMessage(creds.token, to, tag + stripMarkdown(textPart), ct);
+        await sendVideoByUrl(creds.token, to, ct, videoSrc);
+      } catch (err) {
+        console.error(pc.red(`   视频发送失败: ${err.message}`));
+        await sendMessage(creds.token, to, tag + stripMarkdown(content), ct);
+      }
+    } else if (fileMatch) {
+      const fileSrc = fileMatch[1];
+      const textPart = content.replace(/\[file:.*?\]/g, "").trim();
+      const fileName = fileSrc.split("/").pop() || "file";
+      console.log(pc.green(`→ [send] [文件] ${fileSrc.slice(0, 60)}`));
+      try {
+        const { writeFileSync, unlinkSync } = await import("node:fs");
+        const { tmpdir } = await import("node:os");
+        const { join } = await import("node:path");
+        const resp = await fetch(fileSrc);
+        if (!resp.ok) throw new Error(`file download failed: ${resp.status}`);
+        const buf = Buffer.from(await resp.arrayBuffer());
+        const tmpPath = join(tmpdir(), `wx-file-${Date.now()}-${fileName}`);
+        writeFileSync(tmpPath, buf);
+        try {
+          const uploaded = await uploadToCdn(tmpPath, to, creds.token, 3);
+          const { sendFileMessage } = await import("./weixin.mjs");
+          await sendFileMessage(creds.token, to, ct, uploaded, fileName);
+          if (textPart) await sendMessage(creds.token, to, tag + stripMarkdown(textPart), ct);
+        } finally {
+          try { unlinkSync(tmpPath); } catch {}
+        }
+      } catch (err) {
+        console.error(pc.red(`   文件发送失败: ${err.message}`));
+        await sendMessage(creds.token, to, tag + stripMarkdown(content), ct);
+      }
+    } else {
+      // 纯文本
+      console.log(pc.green(`→ [send] ${content.slice(0, 80)}${content.length > 80 ? "..." : ""}`));
+      await sendMessage(creds.token, to, tag + stripMarkdown(content), ct);
+    }
+  }
+
+  // ─── HTTP API Server (/api/send) ────────────────────────────────
+  const httpServer = createServer(async (req, res) => {
+    // CORS
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
+
+    if (req.method === "POST" && req.url === "/api/send") {
+      let body = "";
+      for await (const chunk of req) body += chunk;
+      try {
+        const { to, content } = JSON.parse(body);
+        if (!to || !content) {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "missing 'to' or 'content'" }));
+          return;
+        }
+        console.log(pc.cyan(`← [API] → ${to.slice(0, 12)}...: ${content.slice(0, 60)}`));
+        await sendContent(to, content);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end("{}");
+      } catch (err) {
+        console.error(pc.red(`   /api/send 错误: ${err.message}`));
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "not found" }));
+  });
+
+  httpServer.on("error", (err) => {
+    if (err.code === "EADDRINUSE") {
+      console.warn(pc.yellow(`⚠️ 端口 ${port} 已被占用，API 未启动（bridge 继续运行）`));
+    } else {
+      console.error(pc.red(`API 服务器错误: ${err.message}`));
+    }
+  });
+  httpServer.listen(port, () => {
+    console.log(pc.green(`📡 API 已启动: http://localhost:${port}/api/send`));
+  });
+
   const loop = async () => {
     while (true) {
       try {
@@ -116,6 +288,9 @@ export async function start(agents, defaultAgent) {
           const from = msg.from_user_id || "";
           const contextToken = msg.context_token || "";
           if (!from) continue;
+
+          // 缓存 contextToken 供 /api/send 使用
+          if (contextToken) userContextTokens.set(from, contextToken);
 
           const text = extractText(msg);
           const media = extractMedia(msg);
@@ -328,135 +503,7 @@ export async function start(agents, defaultAgent) {
             const reply = await callAgentAuto(agentUrl, agentMessages, from);
             if (typing) typing.onIdle();
             const agentTag = multiMode ? `[${targetAgent}] ` : "";
-
-            // 检查回复是否包含 [audio:path/url]
-            const audioMatch = reply.match(/\[audio:(.*?)\]/);
-            // 检查回复是否包含图片（markdown 格式，支持 URL 和 data URI）
-            const imageMatch = reply.match(/!\[.*?\]\(((?:https?:\/\/|data:image\/)[^\s)]+)\)/);
-            // 检查回复是否包含 [video:path/url]
-            const videoMatch = reply.match(/\[video:(.*?)\]/);
-            // 检查回复是否包含 [file:path/url]
-            const fileMatch = reply.match(/\[file:(.*?)\]/);
-
-            if (audioMatch) {
-              const audioSrc = audioMatch[1];
-              const textPart = reply.replace(/\[audio:.*?\]/g, "").trim();
-              console.log(pc.green(`→ [${targetAgent}] [语音] ${audioSrc.slice(0, 60)}`));
-              try {
-                const { execSync } = await import("node:child_process");
-                const { statSync, writeFileSync } = await import("node:fs");
-                const { uploadToCdn } = await import("./cdn.mjs");
-                const { buildHeaders, BASE_URL: baseUrl } = await import("./weixin.mjs");
-
-                // 下载或使用本地文件
-                let audioFile = audioSrc;
-                if (audioSrc.startsWith("http://") || audioSrc.startsWith("https://")) {
-                  const resp = await fetch(audioSrc);
-                  if (!resp.ok) throw new Error(`下载失败: ${resp.status}`);
-                  writeFileSync("/tmp/wxta_audio_in.mp3", Buffer.from(await resp.arrayBuffer()));
-                  audioFile = "/tmp/wxta_audio_in.mp3";
-                }
-
-                // 转码: audio → PCM(16kHz) → SILK
-                execSync(`ffmpeg -y -i "${audioFile}" -ar 16000 -ac 1 -f s16le /tmp/wxta_audio.pcm 2>/dev/null`);
-                execSync(`python3 -c "import pilk; pilk.encode('/tmp/wxta_audio.pcm', '/tmp/wxta_audio.silk', pcm_rate=16000, tencent=True)"`);
-                const pcmSize = statSync("/tmp/wxta_audio.pcm").size;
-                const durationMs = Math.round((pcmSize / 32000) * 1000);
-
-                // CDN 上传 + 发送语音（与"语音测试"相同格式）
-                const cdn = await uploadToCdn("/tmp/wxta_audio.silk", from, creds.token, 4);
-                const aesKeyB64 = Buffer.from(cdn.aeskey).toString("base64");
-                const crypto = await import("node:crypto");
-
-                const body = JSON.stringify({
-                  msg: {
-                    from_user_id: "", to_user_id: from,
-                    client_id: crypto.randomUUID(),
-                    message_type: 2, message_state: 2,
-                    item_list: [{
-                      type: 3,
-                      voice_item: {
-                        media: {
-                          encrypt_query_param: cdn.downloadParam,
-                          aes_key: aesKeyB64,
-                        },
-                        encode_type: 4,
-                        bits_per_sample: 16,
-                        sample_rate: 16000,
-                        playtime: durationMs,
-                      },
-                    }],
-                    context_token: contextToken,
-                  },
-                  base_info: {},
-                });
-                await fetch(`${baseUrl}/ilink/bot/sendmessage`, {
-                  method: "POST",
-                  headers: buildHeaders(creds.token, body),
-                  body,
-                });
-                console.log(pc.green(`→ [语音] 已发送 (${durationMs}ms)`));
-                if (textPart) await sendMessage(creds.token, from, agentTag + stripMarkdown(textPart), contextToken);
-              } catch (err) {
-                console.error(pc.red(`   语音发送失败: ${err.message}`));
-                await sendMessage(creds.token, from, agentTag + reply.replace(/\[audio:.*?\]/g, "").trim() || reply, contextToken);
-              }
-            } else if (imageMatch) {
-              // Agent 回复了图片 URL → 直接发到微信
-              const imageUrl = imageMatch[1];
-              const textPart = reply.replace(/!\[.*?\]\(https?:\/\/[^\s)]+\)/g, "").trim();
-              console.log(pc.green(`→ [${targetAgent}] [图片] ${imageUrl.slice(0, 60)}`));
-              try {
-                if (textPart) await sendMessage(creds.token, from, agentTag + stripMarkdown(textPart), contextToken);
-                await sendImageByUrl(creds.token, from, contextToken, imageUrl);
-              } catch (err) {
-                console.error(pc.red(`   图片发送失败: ${err.message}`));
-                await sendMessage(creds.token, from, agentTag + reply, contextToken);
-              }
-            } else if (videoMatch) {
-              // Agent 回复了视频 → CDN 上传发到微信
-              const videoSrc = videoMatch[1];
-              const textPart = reply.replace(/\[video:.*?\]/g, "").trim();
-              console.log(pc.green(`→ [${targetAgent}] [视频] ${videoSrc.slice(0, 60)}`));
-              try {
-                if (textPart) await sendMessage(creds.token, from, agentTag + stripMarkdown(textPart), contextToken);
-                await sendVideoByUrl(creds.token, from, contextToken, videoSrc);
-              } catch (err) {
-                console.error(pc.red(`   视频发送失败: ${err.message}`));
-                await sendMessage(creds.token, from, agentTag + stripMarkdown(reply), contextToken);
-              }
-            } else if (fileMatch) {
-              // Agent 回复了文件 → CDN 上传发到微信
-              const fileSrc = fileMatch[1];
-              const textPart = reply.replace(/\[file:.*?\]/g, "").trim();
-              const fileName = fileSrc.split("/").pop() || "file";
-              console.log(pc.green(`→ [${targetAgent}] [文件] ${fileSrc.slice(0, 60)}`));
-              try {
-                const { writeFileSync, unlinkSync } = await import("node:fs");
-                const { tmpdir } = await import("node:os");
-                const { join } = await import("node:path");
-                const resp = await fetch(fileSrc);
-                if (!resp.ok) throw new Error(`file download failed: ${resp.status}`);
-                const buf = Buffer.from(await resp.arrayBuffer());
-                const tmpPath = join(tmpdir(), `wx-file-${Date.now()}-${fileName}`);
-                writeFileSync(tmpPath, buf);
-                try {
-                  const uploaded = await uploadToCdn(tmpPath, from, creds.token, 3);
-                  const { sendFileMessage } = await import("./weixin.mjs");
-                  await sendFileMessage(creds.token, from, contextToken, uploaded, fileName);
-                  if (textPart) await sendMessage(creds.token, from, agentTag + stripMarkdown(textPart), contextToken);
-                } finally {
-                  try { unlinkSync(tmpPath); } catch {}
-                }
-              } catch (err) {
-                console.error(pc.red(`   文件发送失败: ${err.message}`));
-                await sendMessage(creds.token, from, agentTag + stripMarkdown(reply), contextToken);
-              }
-            } else {
-              // 纯文本回复
-              console.log(pc.green(`→ [${targetAgent}] ${reply.slice(0, 80)}${reply.length > 80 ? "..." : ""}`));
-              await sendMessage(creds.token, from, agentTag + stripMarkdown(reply), contextToken);
-            }
+            await sendContent(from, reply, agentTag);
           } catch (err) {
             if (typing) typing.onCleanup();
             console.error(pc.red(`   ${targetAgent} 错误: ${err.message}`));
@@ -471,6 +518,7 @@ export async function start(agents, defaultAgent) {
   };
 
   process.on("SIGINT", () => {
+    httpServer.close();
     console.log(pc.dim("\n桥已停止"));
     process.exit(0);
   });
