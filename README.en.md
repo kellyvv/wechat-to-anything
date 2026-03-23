@@ -66,7 +66,7 @@
 > **Each CLI Agent requires a one-time auth setup before first use:**
 > - **Claude**: Run `claude` and log in with your Anthropic account
 > - **Gemini**: Run `gemini` once — it opens a browser for Google OAuth. After that, the token is cached and `--gemini` mode works automatically
-> - **Codex**: Set the `OPENAI_API_KEY` environment variable
+> - **Codex**: Run `codex` once and complete the OpenAI OAuth login
 
 ## Quick Start
 

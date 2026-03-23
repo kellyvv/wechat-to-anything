@@ -66,7 +66,7 @@
 > **首次使用各 CLI Agent 前需完成认证：**
 > - **Claude**：`claude` 登录你的 Anthropic 账号
 > - **Gemini**：运行一次 `gemini`，浏览器弹出 Google OAuth 授权，完成后 token 会缓存到本地，之后 `--gemini` 模式即可正常使用
-> - **Codex**：设置 `OPENAI_API_KEY` 环境变量
+> - **Codex**：运行一次 `codex`，完成 OpenAI OAuth 授权
 
 ## 快速开始
 
