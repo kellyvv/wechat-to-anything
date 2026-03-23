@@ -8,14 +8,12 @@
  * - cli://gemini       → 内置 Gemini CLI 适配器
  */
 
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { writeFile, readFile, unlink, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
-
-// Windows 上 npm 全局安装生成 .cmd，execFile/spawn 需要 shell: true 才能找到
-const IS_WIN = process.platform === "win32";
+import crossSpawn from "cross-spawn";
 
 /**
  * 统一调用接口 — 根据 URL 自动选择适配器
@@ -40,8 +38,12 @@ export async function checkAgent(url) {
     const name = url.replace("cli://", "");
     const cmd = { codex: "codex", gemini: "gemini", claude: "claude", openclaw: "openclaw" }[name] || name;
     return new Promise((resolve, reject) => {
-      execFile(cmd, ["--version"], { timeout: 5000, shell: IS_WIN }, (err) => {
-        if (err) reject(new Error(`${cmd} CLI 未安装（npm install -g ${{
+      const child = crossSpawn(cmd, ["--version"], { timeout: 5000 });
+      child.on("error", (err) => reject(new Error(`${cmd} CLI 未安装（npm install -g ${{
+          codex: "@openai/codex", gemini: "@google/gemini-cli", claude: "@anthropic-ai/claude-code", openclaw: "openclaw"
+        }[name] || cmd}）`)));
+      child.on("close", (code) => {
+        if (code !== 0) reject(new Error(`${cmd} CLI 未安装（npm install -g ${{
           codex: "@openai/codex", gemini: "@google/gemini-cli", claude: "@anthropic-ai/claude-code", openclaw: "openclaw"
         }[name] || cmd}）`));
         else resolve();
@@ -164,23 +166,26 @@ function runCodex(prompt, imagePaths = []) {
     for (const img of imagePaths) args.push("-i", img);
     args.push("--", prompt);
 
-    execFile("codex", args, { timeout: 300_000, maxBuffer: 2 * 1024 * 1024, cwd: tmpdir(), shell: IS_WIN },
-      async (err, stdout, stderr) => {
+    const child = crossSpawn("codex", args, { timeout: 300_000, cwd: tmpdir() });
+    let stdout = "", stderr = "";
+    child.stdout.on("data", (d) => (stdout += d));
+    child.stderr.on("data", (d) => (stderr += d));
+    child.on("close", async () => {
         try {
           const reply = await readFile(outFile, "utf-8").catch(() => "");
           await unlink(outFile).catch(() => {});
           if (reply.trim()) resolve(reply.trim());
           else if (stdout.trim()) resolve(stdout.trim());
-          else if (err) reject(new Error((stderr || err.message).trim().slice(0, 300)));
-          else resolve("(empty response)");
+          else reject(new Error((stderr || "empty response").trim().slice(0, 300)));
         } catch (e) { reject(e); }
       });
+    child.on("error", (err) => reject(err));
   });
 }
 
 function runGemini(prompt) {
   return new Promise((resolve, reject) => {
-    const child = spawn("gemini", [], { cwd: tmpdir(), stdio: ["pipe", "pipe", "pipe"], timeout: 300_000, shell: IS_WIN });
+    const child = crossSpawn("gemini", [], { cwd: tmpdir(), stdio: ["pipe", "pipe", "pipe"], timeout: 300_000 });
     let stdout = "", stderr = "";
     child.stdout.on("data", (d) => (stdout += d));
     child.stderr.on("data", (d) => (stderr += d));
@@ -197,10 +202,9 @@ function runGemini(prompt) {
 
 function runClaude(prompt) {
   return new Promise((resolve, reject) => {
-    const child = spawn("claude", ["--print", prompt], {
+    const child = crossSpawn("claude", ["--print", prompt], {
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 300_000,
-      shell: IS_WIN,
     });
     let stdout = "", stderr = "";
     child.stdout.on("data", (d) => (stdout += d));
@@ -222,7 +226,6 @@ function runOpenClaw(prompt) {
       cwd: tmpdir(),
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 300_000,
-      shell: IS_WIN,
     });
     let stdout = "", stderr = "";
     child.stdout.on("data", (d) => (stdout += d));
