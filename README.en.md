@@ -67,14 +67,19 @@ npx wechat-to-anything http://your-agent:8000/v1
 ### Dependencies
 
 ```bash
-# Node.js >= 22
+# 1. Node.js >= 22
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
 nvm install 22
 
-# ffmpeg (voice / video sending)
+# 2. Python 3 + pip
+brew install python3       # macOS
+apt install python3 python3-pip  # Linux
+
+# 3. ffmpeg (voice / video sending)
 brew install ffmpeg        # macOS
 apt install ffmpeg         # Linux
 
-# pilk (voice SILK encoding)
+# 4. pilk (voice SILK encoding)
 pip install pilk
 ```
 
