@@ -2,7 +2,7 @@
   <img src="docs/banner.png" alt="wechat-to-anything" />
 </p>
 
-# wechat-to-anything
+<h1 align="center">wechat-to-anything</h1>
 
 > 一条命令，把微信变成任何 AI Agent 的前端。
 >
