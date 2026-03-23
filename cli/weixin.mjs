@@ -391,24 +391,77 @@ export async function sendTyping(token, userId, typingTicket, status = 1) {
 }
 
 /**
- * 提取消息文本（支持语音转文字）
+ * 提取消息文本（支持语音转文字 + 引用消息）
+ *
+ * 引用消息结构 (ref_msg):
+ *   item.ref_msg.title       — 引用摘要
+ *   item.ref_msg.message_item — 引用的原始 item（可能是文字/图片/文件等）
+ *
+ * 参考: openclaw-weixin inbound.ts#L86-98
  */
 export function extractText(msg) {
   const items = msg.item_list || [];
   for (const item of items) {
-    if (item.type === 1 && item.text_item?.text) return item.text_item.text;
+    if (item.type === 1 && item.text_item?.text) {
+      const text = item.text_item.text;
+      const ref = item.ref_msg;
+      if (!ref) return text;
+
+      // 引用的是媒体（图片/文件/视频） → 只返回用户文字，媒体由 extractMedia 处理
+      if (ref.message_item && isMediaItem(ref.message_item)) return text;
+
+      // 引用的是文字 → 拼接引用上下文
+      const parts = [];
+      if (ref.title) parts.push(ref.title);
+      if (ref.message_item?.text_item?.text) parts.push(ref.message_item.text_item.text);
+      if (!parts.length) return text;
+      return `[引用: ${parts.join(" | ")}]\n${text}`;
+    }
     // 语音转文字（微信自带）
     if (item.type === 3 && item.voice_item?.text) return item.voice_item.text;
   }
   return "";
 }
 
+/** 判断 item 是否为媒体类型 (image=2, voice=3, file=4, video=5) */
+function isMediaItem(item) {
+  return item.type === 2 || item.type === 3 || item.type === 4 || item.type === 5;
+}
+
 /**
- * 提取多媒体信息
- * @returns {{ type: 'image'|'voice'|'file'|'video', encryptQueryParam, aesKey, fileName?, voiceText? } | null}
+ * 提取多媒体信息（含引用消息中的媒体）
+ *
+ * 优先级：主消息中的媒体 > 引用消息中的媒体
+ * 参考: openclaw-weixin process-message.ts#L112-138
+ *
+ * @returns {{ type: 'image'|'voice'|'file'|'video', encryptQueryParam, aesKey, fileName?, voiceText?, fromRef? } | null}
  */
 export function extractMedia(msg) {
   const items = msg.item_list || [];
+
+  // 1. 先扫描主消息中的媒体
+  const mainMedia = extractMediaFromItem(items);
+  if (mainMedia) return mainMedia;
+
+  // 2. 无主媒体时，检查引用消息中的媒体 (ref_msg)
+  for (const item of items) {
+    if (item.type === 1 && item.ref_msg?.message_item && isMediaItem(item.ref_msg.message_item)) {
+      const refMedia = extractMediaFromItem([item.ref_msg.message_item]);
+      if (refMedia) {
+        refMedia.fromRef = true; // 标记来自引用
+        return refMedia;
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * 从 item 列表中提取第一个媒体
+ * @private
+ */
+function extractMediaFromItem(items) {
   for (const item of items) {
     // 图片
     if (item.type === 2 && item.image_item?.media?.encrypt_query_param) {
@@ -434,7 +487,6 @@ export function extractMedia(msg) {
     }
     // 文件
     if (item.type === 4 && item.file_item?.media?.encrypt_query_param) {
-
       return {
         type: "file",
         encryptQueryParam: item.file_item.media.encrypt_query_param,
@@ -444,7 +496,6 @@ export function extractMedia(msg) {
     }
     // 视频
     if (item.type === 5 && item.video_item?.media?.encrypt_query_param) {
-
       return {
         type: "video",
         encryptQueryParam: item.video_item.media.encrypt_query_param,

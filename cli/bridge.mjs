@@ -307,8 +307,8 @@ export async function start(agents, defaultAgent, { port = 9099 } = {}) {
           // 构建发给 Agent 的消息
           let agentMessages;
 
-          if (media?.type === "image") {
-            // 图片：下载解密，缓存 base64，等待用户发文字
+          if (media?.type === "image" && !media.fromRef) {
+            // 直接发送的图片：下载解密，缓存 base64，等待用户发文字
             console.log(pc.cyan(`← [微信] ${from}: [图片] (等待文字问题...)`));
             try {
               const buf = await downloadAndDecrypt(media.encryptQueryParam, media.aesKey);
@@ -321,6 +321,23 @@ export async function start(agents, defaultAgent, { port = 9099 } = {}) {
               console.error(pc.red(`   图片下载失败: ${err.message}`));
             }
             continue; // 不发给 Agent，等文字
+
+          } else if (media?.type === "image" && media.fromRef && text) {
+            // 引用图片 + 文字：立即合并发送（不缓存）
+            console.log(pc.cyan(`← [微信] ${from}: [引用图片+文字] ${text.slice(0, 80)}`));
+            try {
+              const buf = await downloadAndDecrypt(media.encryptQueryParam, media.aesKey);
+              agentMessages = [{
+                role: "user",
+                content: [
+                  { type: "text", text },
+                  { type: "image_url", image_url: { url: `data:image/jpeg;base64,${buf.toString("base64")}` } },
+                ],
+              }];
+            } catch (err) {
+              console.error(pc.red(`   引用图片下载失败: ${err.message}`));
+              agentMessages = [{ role: "user", content: text }];
+            }
 
           } else if (text) {
             // === 管理命令 ===
@@ -376,26 +393,32 @@ export async function start(agents, defaultAgent, { port = 9099 } = {}) {
               continue;
             }
           } else if (media?.type === "file") {
-            console.log(pc.cyan(`← [微信] ${from}: [文件] ${media.fileName}`));
+            const label = media.fromRef ? "引用文件" : "文件";
+            console.log(pc.cyan(`← [微信] ${from}: [${label}] ${media.fileName}`));
             try {
               const { buffer } = await downloadMediaToFile(media.encryptQueryParam, media.aesKey, media.fileName.split(".").pop());
               if (buffer.length < 100_000) {
                 const content = buffer.toString("utf-8");
                 if (!content.includes("\x00")) {
-                  agentMessages = [{ role: "user", content: `用户发送了文件 "${media.fileName}"，内容如下：\n\n${content}` }];
+                  const prefix = (media.fromRef && text) ? `${text}\n\n` : "";
+                  agentMessages = [{ role: "user", content: `${prefix}用户发送了文件 "${media.fileName}"，内容如下：\n\n${content}` }];
                 } else {
-                  agentMessages = [{ role: "user", content: `用户发送了文件 "${media.fileName}"（${(buffer.length / 1024).toFixed(1)} KB，二进制文件）` }];
+                  const prefix = (media.fromRef && text) ? `${text}\n\n` : "";
+                  agentMessages = [{ role: "user", content: `${prefix}用户发送了文件 "${media.fileName}"（${(buffer.length / 1024).toFixed(1)} KB，二进制文件）` }];
                 }
               } else {
-                agentMessages = [{ role: "user", content: `用户发送了文件 "${media.fileName}"（${(buffer.length / 1024).toFixed(1)} KB）` }];
+                const prefix = (media.fromRef && text) ? `${text}\n\n` : "";
+                agentMessages = [{ role: "user", content: `${prefix}用户发送了文件 "${media.fileName}"（${(buffer.length / 1024).toFixed(1)} KB）` }];
               }
             } catch (err) {
               console.error(pc.red(`   文件下载失败: ${err.message}`));
               continue;
             }
           } else if (media?.type === "video") {
-            console.log(pc.cyan(`← [微信] ${from}: [视频]`));
-            agentMessages = [{ role: "user", content: "用户发送了一段视频" }];
+            const label = media.fromRef ? "引用视频" : "视频";
+            console.log(pc.cyan(`← [微信] ${from}: [${label}]`));
+            const prefix = (media.fromRef && text) ? `${text}\n\n` : "";
+            agentMessages = [{ role: "user", content: `${prefix}用户发送了一段视频` }];
           } else {
             continue;
           }
