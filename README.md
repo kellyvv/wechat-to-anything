@@ -4,8 +4,17 @@
 
 <h1 align="center">wechat-to-anything</h1>
 
-> 一条命令，把微信变成任何 AI Agent 的前端。
->
+<p align="center">
+  <a href="https://www.npmjs.com/package/wechat-to-anything"><img src="https://img.shields.io/npm/v/wechat-to-anything?style=flat-square&color=cb3837" alt="npm" /></a>
+  <a href="https://github.com/kellyvv/wechat-to-anything"><img src="https://img.shields.io/github/stars/kellyvv/wechat-to-anything?style=flat-square&color=yellow" alt="stars" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/kellyvv/wechat-to-anything?style=flat-square" alt="license" /></a>
+  <a href="https://github.com/kellyvv/wechat-to-anything"><img src="https://img.shields.io/badge/node-%3E%3D22-brightgreen?style=flat-square" alt="node" /></a>
+</p>
+
+<p align="center">
+  <a href="#快速开始">快速开始</a> · <a href="#全模态支持矩阵">全模态</a> · <a href="#多媒体协议">多媒体协议</a> · <a href="#多-agent-模式">多 Agent</a> · <a href="#接入自己的-agent">自定义 Agent</a>
+</p>
+
 > ⭐ 如果这个项目对你有帮助，请给个 Star！
 
 **全网首个**支持微信与 AI Agent 全模态双向通信的开源项目 —— 文本、图片、语音、视频、文件，发送和接收全覆盖。
