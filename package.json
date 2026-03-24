@@ -1,6 +1,6 @@
 {
   "name": "weiclaw",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "description": "一条命令，把微信变成任何 AI Agent 的入口",
   "type": "module",
   "bin": {
